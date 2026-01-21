@@ -2,55 +2,41 @@ import os
 import asyncio
 from dotenv import load_dotenv
 
-# Importing the new team-based tools from AutoGen 0.10.x
-from autogen_agentchat.agents import AssistantAgent
+from tools import get_weather, save_to_file
+from autogen_agentchat.agents import AssistantAgent, UserProxyAgent
 from autogen_agentchat.teams import RoundRobinGroupChat
-from autogen_agentchat.conditions import TextMentionTermination, MaxMessageTermination
+from autogen_agentchat.conditions import TextMentionTermination
 from autogen_ext.models.openai import OpenAIChatCompletionClient
 
 load_dotenv()
-github_token = os.getenv("GITHUB_TOKEN")
 
 async def main():
-    # 1. THE PHONE LINE (Connecting to the GitHub Brain)
     model_client = OpenAIChatCompletionClient(
         model="gpt-4o",
-        api_key=github_token,
+        api_key=os.getenv("GITHUB_TOKEN"),
         base_url="https://models.github.ai/inference",
     )
 
-    # 2. EMPLOYEE 1: THE CODER
-    coder = AssistantAgent(
-        name="coder",
+    # 1. THE AI AGENT
+    travel_agent = AssistantAgent(
+        name="travel_agent",
         model_client=model_client,
-        system_message="You are a Python Developer. Write code to solve tasks. Always end your message by asking the reviewer for feedback."
+        tools=[get_weather, save_to_file], 
+        system_message="Prepare a travel tip and ask the user for permission to save it to a file."
     )
 
-    # 3. EMPLOYEE 2: THE SENIOR REVIEWER
-    # This employee's handbook says: "Don't let bad code pass!"
-    reviewer = AssistantAgent(
-        name="reviewer",
-        model_client=model_client,
-        system_message="""You are a Senior Reviewer. Check the code for accuracy and speed.
-        If the code is perfect, end your message with the exact word: APPROVE.
-        If it needs work, tell the coder what to fix."""
-    )
+    # 2. THE HUMAN PROXY (You)
+    # human_input_mode="ALWAYS" means it will stop and wait for you to type in the terminal.
+    user_proxy = UserProxyAgent(name="user")
 
-    # 4. THE MEETING RULES (Termination)
-    # The meeting ends if someone says "APPROVE" or if they've talked for 10 turns.
-    termination = TextMentionTermination("APPROVE") | MaxMessageTermination(10)
+    # 3. THE TEAM
+    # This creates a flow: Agent talks -> You talk -> Agent talks
+    termination = TextMentionTermination("DONE")
+    team = RoundRobinGroupChat([travel_agent, user_proxy], termination_condition=termination)
 
-    # 5. THE MEETING ROOM (The Team)
-    team = RoundRobinGroupChat([coder, reviewer], termination_condition=termination)
-
-    # 6. START THE WORK
-    print("--- The Meeting is Starting ---")
+    print("--- Starting Mission with Human Oversight ---")
     
-    # We use 'run_stream' so we can watch them talk in real-time
-    async for message in team.run_stream(task="Write a Python function for the 10th Fibonacci number."):
-        if hasattr(message, 'content'):
-            print(f"\n>> {message.source.upper()} says:\n{message.content}")
-            print("-" * 30)
+    await team.run(task="I'm going to London. Plan a tip and save it only if I say yes.")
 
 if __name__ == "__main__":
     asyncio.run(main())
